@@ -35,17 +35,48 @@ export class ReconciliationService {
   ) {}
 
   async reconcileGovernance(latestLedger: number) {
-    const [treasury, feeConfig] = await Promise.all([
+    const network = this.manifest.data.network;
+    const governanceContractId = this.manifest.data.contracts.dike_governance;
+    const marketFactoryContractId = this.manifest.data.contracts.market_factory;
+    const councilContractId = this.manifest.data.contracts.council_of_dike;
+
+    const [treasury, feeConfig, timelockEvent, treasuryEvent, pauseAuthorityEvent] = await Promise.all([
       this.contracts.getTreasury().catch(() => null),
       this.contracts.getFeeConfig().catch(() => null),
+      this.repository.getLatestGovernanceAddressEvent(network, governanceContractId, "timelock"),
+      this.repository.getLatestGovernanceAddressEvent(network, governanceContractId, "treas"),
+      this.repository.getLatestGovernanceAddressEvent(network, governanceContractId, "pauser"),
     ]);
 
-    await this.repository.upsertGovernanceConfig(this.manifest.data.network, {
-      treasury,
-      timelock: this.manifest.data.contracts.dike_timelock,
+    await this.repository.upsertGovernanceConfig(network, {
+      treasury: treasuryEvent ?? treasury,
+      timelock: timelockEvent ?? this.manifest.data.contracts.dike_timelock,
       fee_config_json: normalizeContractValue(feeConfig ?? {}),
-      pause_authority: null,
+      pause_authority: pauseAuthorityEvent,
     });
+
+    const [creatorApprovals, councilApprovals] = await Promise.all([
+      this.repository.getLatestGovernanceApprovals(network, marketFactoryContractId, "creator"),
+      this.repository.getLatestGovernanceApprovals(network, councilContractId, "member"),
+    ]);
+
+    for (const approval of creatorApprovals) {
+      await this.repository.upsertGovernanceList(
+        network,
+        "creator",
+        approval.address,
+        approval.approved,
+      );
+    }
+
+    for (const approval of councilApprovals) {
+      await this.repository.upsertGovernanceList(
+        network,
+        "member",
+        approval.address,
+        approval.approved,
+      );
+    }
 
     const roles = [
       "factory",
@@ -63,7 +94,7 @@ export class ReconciliationService {
       try {
         const moduleAddress = await this.contracts.getModule(role);
         await this.repository.upsertGovernanceModule(
-          this.manifest.data.network,
+          network,
           role,
           String(moduleAddress),
         );
