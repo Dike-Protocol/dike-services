@@ -27,6 +27,10 @@ function sendJson(reply: { send: (payload: unknown) => void }, payload: unknown)
   reply.send(JSON.parse(JSON.stringify(payload, jsonReplacer)));
 }
 
+function normalizeAddress(value: unknown) {
+  return typeof value === "string" ? value.trim().toUpperCase() : "";
+}
+
 async function createServices() {
   const env = loadEnv();
   const logger = createLogger(env);
@@ -130,6 +134,48 @@ export async function buildApp() {
       params.address,
     );
     sendJson(reply, portfolio);
+  });
+
+  app.get("/authz/:address", async (request, reply) => {
+    const params = request.params as { address: string };
+    const address = normalizeAddress(params.address);
+    const governance = await services.repository.getAdminGovernance(
+      services.manifest.data.network,
+    );
+
+    const approvedLists = (governance.lists as Array<Record<string, unknown>>).filter(
+      (entry) => entry.approved === true,
+    );
+    const approvedCreators = approvedLists
+      .filter((entry) => entry.kind === "creator")
+      .map((entry) => normalizeAddress(entry.address));
+    const councilMembers = approvedLists
+      .filter((entry) => entry.kind === "member")
+      .map((entry) => normalizeAddress(entry.address));
+
+    const config = (governance.config ?? {}) as Record<string, unknown>;
+    const adminAddresses = [
+      services.manifest.data.admin,
+      services.manifest.data.governance_authority,
+      config.timelock,
+      config.pause_authority,
+    ]
+      .map(normalizeAddress)
+      .filter(Boolean);
+
+    const isApprovedCreator = approvedCreators.includes(address);
+    const isCouncilMember = councilMembers.includes(address);
+    const isAdmin = adminAddresses.includes(address);
+
+    sendJson(reply, {
+      address,
+      canResolve: Boolean(address),
+      canCouncil: isCouncilMember,
+      canAdmin: isAdmin,
+      isApprovedCreator,
+      isCouncilMember,
+      isAdmin,
+    });
   });
 
   app.get("/markets/:id/resolution", async (request, reply) => {
