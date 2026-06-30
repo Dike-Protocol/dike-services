@@ -25,7 +25,21 @@ docker run -d \
   -p 4000:4000 \
   "$IMAGE_NAME"
 
-sleep 5
-curl --fail --silent --show-error http://127.0.0.1:4000/health >/dev/null
+for attempt in $(seq 1 30); do
+  if curl --fail --silent --show-error http://127.0.0.1:4000/health >/dev/null; then
+    docker image prune -f >/dev/null
+    exit 0
+  fi
 
-docker image prune -f >/dev/null
+  if ! docker ps --format '{{.Names}}' | grep -Fxq "$APP_NAME"; then
+    echo "Container exited before becoming healthy."
+    docker logs --tail=200 "$APP_NAME" || true
+    exit 1
+  fi
+
+  sleep 2
+done
+
+echo "Container did not become healthy in time."
+docker logs --tail=200 "$APP_NAME" || true
+exit 1
