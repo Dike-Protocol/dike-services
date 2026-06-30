@@ -1,79 +1,219 @@
-# Dike Services
+# dike-services
 
-Backend/indexing service for Dike Protocol on Stellar testnet.
+The backend indexing and query layer for [Dike Protocol](https://github.com/Dike-Protocol) — a prediction market platform built on Stellar/Soroban.
 
-## What Is Included
+This service polls Stellar RPC for Soroban contract events, indexes them into PostgreSQL, runs periodic reconciliation jobs against on-chain state, and exposes a read-only REST API consumed by `dike-web`.
 
-- Fastify API server
-- Stellar RPC event polling and checkpointing
-- Postgres-backed query state
-- Redis connection for future queue/background coordination
-- Testnet deployment manifest bundled in-repo at [deployments/testnet.json](/Users/sachplayz/Projects/Dike_Stellar/dike-services/deployments/testnet.json:1)
+## Architecture
 
-## Local Run
+```
+Stellar RPC (getEvents)
+        │
+        ▼
+  IndexerWorker ──► EventSource ──► EventDispatcher ──► StateRepository (PostgreSQL)
+        │                                                        │
+        └──► ReconciliationService ◄───────────────────────────┘
+                       │
+                       ▼
+              Direct contract reads (Soroban RPC)
+                       │
+                       ▼
+              Overwrite stale projections
 
-1. Create `.env` from [.env.example](/Users/sachplayz/Projects/Dike_Stellar/dike-services/.env.example:1)
-2. Fill in `DATABASE_URL` and `REDIS_URL`
-3. Run:
+REST API (Fastify) ──► StateRepository ──► dike-web
+```
+
+**Components:**
+
+| Component | Responsibility |
+|---|---|
+| `IndexerWorker` | Polls Stellar RPC for events per contract, advances checkpoints after each committed batch |
+| `EventDispatcher` | Routes decoded events to the correct reducer |
+| `ReconciliationService` | Periodically reads contract state directly and overwrites indexed projections |
+| `ScheduledJobs` | Orchestrates reconciliation on a configurable interval |
+| Fastify API | Serves query-ready market, portfolio, resolution, council, and admin state |
+
+## Indexed Contracts
+
+| Contract | Manifest key |
+|---|---|
+| DikeMarketFactory | `market_factory` |
+| DikeMarketRegistry | `market_registry` |
+| DikeConditionalTokens | `conditional_tokens` |
+| CollateralVault | `collateral_vault` |
+| DikeAMM | `amm` |
+| FeeManager | `fee_manager` |
+| CODOracle | `cod_oracle` |
+| CouncilOfDike | `council_of_dike` |
+| DikeGovernance | `dike_governance` |
+| DikeTimelock | `dike_timelock` |
+
+## Prerequisites
+
+- Node.js 20+
+- Docker (for PostgreSQL and Redis)
+- A deployment manifest from `dike-contracts` (bundled for testnet at `deployments/testnet.json`)
+
+## Getting Started
+
+**1. Install dependencies**
 
 ```bash
 npm install
+```
+
+**2. Start infrastructure**
+
+```bash
+docker compose up -d
+```
+
+Starts PostgreSQL 16 on port `5432` and Redis 7 on port `6379`.
+
+**3. Configure environment**
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` — at minimum set `STELLAR_RPC_URL`, `STELLAR_HORIZON_URL`, `DATABASE_URL`, and `REDIS_URL`. See [Configuration](#configuration) for all variables.
+
+**4. Run migrations**
+
+```bash
 npm run migrate
+```
+
+**5. Start the dev server**
+
+```bash
 npm run dev
 ```
 
-## Required Environment
+The API is available at `http://localhost:4000`.
 
-```env
-NODE_ENV=development
-PORT=4000
+### Docker
 
-STELLAR_NETWORK=testnet
-STELLAR_RPC_URL=https://soroban-testnet.stellar.org
-STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
-STELLAR_NETWORK_PASSPHRASE=Test SDF Network ; September 2015
-
-DIKE_MANIFEST_PATH=./deployments/testnet.json
-
-DATABASE_URL=postgresql://...
-REDIS_URL=redis://...
-INDEXER_START_LEDGER=...
-```
-
-`DIKE_CONTRACTS_ROOT` is optional and only useful if you want to regenerate bindings from a separate contracts checkout.
-
-Set `INDEXER_START_LEDGER` before the first run against an empty database. Stellar RPC only retains recent `getEvents` history, so the service refuses to guess a ledger-1 backfill that cannot be replayed reliably.
-
-## Docker
-
-Build:
+Build and run as a container:
 
 ```bash
 docker build -t dike-services .
-```
 
-Run:
-
-```bash
 docker run --rm -p 4000:4000 \
   -e NODE_ENV=production \
-  -e PORT=4000 \
   -e STELLAR_NETWORK=testnet \
   -e STELLAR_RPC_URL=https://soroban-testnet.stellar.org \
   -e STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org \
   -e STELLAR_NETWORK_PASSPHRASE="Test SDF Network ; September 2015" \
   -e DIKE_MANIFEST_PATH=./deployments/testnet.json \
-  -e INDEXER_START_LEDGER=... \
   -e DATABASE_URL=postgresql://... \
   -e REDIS_URL=redis://... \
   dike-services
 ```
 
-The container runs migrations on startup via `npm run start:prod`.
+The container runs migrations automatically on startup via `npm run start:prod`.
 
-## Cloud Notes
+### Production build
 
-- The repo is now self-contained for testnet runtime deployment.
-- No sibling repo path is required to load the testnet manifest.
-- Generated contract bindings already live in [src/contracts/generated](/Users/sachplayz/Projects/Dike_Stellar/dike-services/src/contracts/generated:1).
-- If credentials were shared in chat, rotate them before production.
+```bash
+npm run build
+npm run start:prod   # runs migrate:prod then starts the compiled server
+```
+
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `4000` | HTTP port |
+| `NODE_ENV` | `development` | `development`, `test`, or `production` |
+| `STELLAR_NETWORK` | `testnet` | `mainnet`, `testnet`, or `local` |
+| `STELLAR_RPC_URL` | — | Soroban RPC endpoint |
+| `STELLAR_HORIZON_URL` | — | Horizon REST endpoint |
+| `STELLAR_NETWORK_PASSPHRASE` | — | Must match `STELLAR_NETWORK` exactly |
+| `DIKE_MANIFEST_PATH` | `./deployments/testnet.json` | Path to contract deployment manifest |
+| `DATABASE_URL` | — | PostgreSQL connection string |
+| `REDIS_URL` | — | Redis connection string |
+| `INDEXER_START_LEDGER` | _(latest)_ | Ledger to begin indexing from on first run |
+| `INDEXER_POLL_INTERVAL_MS` | `5000` | How often the indexer polls for new events |
+| `INDEXER_LEDGER_WINDOW` | `250` | Max ledgers fetched per poll |
+| `RECONCILIATION_INTERVAL_MS` | `60000` | How often reconciliation runs |
+| `INDEXER_LAG_ALERT_THRESHOLD` | `50` | Ledger lag before flagging in metrics |
+
+> [!IMPORTANT]
+> The service refuses to start if `STELLAR_NETWORK_PASSPHRASE` does not match the expected passphrase for the configured `STELLAR_NETWORK`. Set `INDEXER_START_LEDGER` before the first run against an empty database — Stellar RPC only retains recent event history and cannot backfill from ledger 1.
+
+## API
+
+All amounts are serialized as strings to preserve precision.
+
+### `GET /health`
+
+Service liveness, PostgreSQL, Redis, and Stellar RPC connectivity, plus indexer lag per contract.
+
+### `GET /metrics`
+
+Internal counters: event processing failures, RPC errors, reconciliation mismatches, and indexer lag.
+
+### `GET /markets`
+
+List markets with cursor-based pagination.
+
+| Query param | Description |
+|---|---|
+| `status` | Filter by market status |
+| `creator` | Filter by creator address |
+| `collateral` | Filter by collateral contract |
+| `limit` | Page size |
+| `cursor` | Last `market_id` from the previous page |
+
+Returns market summaries with derived YES/NO prices and tradeability state.
+
+### `GET /markets/:id`
+
+Full market detail including pool data, fee config, vault snapshot, resolution request, council case, and recent trades.
+
+### `GET /markets/:id/resolution`
+
+Resolution state with derived next actions (propose, dispute, escalate, finalize, redeem) based on market status, expiry, and dispute windows.
+
+### `GET /users/:address/portfolio`
+
+User positions grouped by market, LP shares, vault state, redeemable positions, and encumbered balances.
+
+### `GET /council/cases`
+
+Council of Dike cases with commit/reveal/finalize windows. Filter by `status`.
+
+### `GET /admin/governance`
+
+Current governance config: treasury, timelock, supported collateral, approved creators, council members, module addresses, and fee config.
+
+### `GET /admin/timelock`
+
+Queued, executable, cancelled, and executed timelock actions.
+
+## Testing
+
+```bash
+npm test             # run all tests once
+npm run test:watch   # watch mode
+```
+
+Tests cover manifest loading, ScVal codecs, event routing, reducer behavior, derived state rules (prices, tradeability, resolution next actions), repository idempotency, and migration correctness.
+
+## Project Structure
+
+```
+src/
+  api/            # Fastify server and request validation
+  config/         # Env loader, manifest loader, network constants
+  contracts/      # Contract client, ScVal codecs, generated bindings
+  db/             # PostgreSQL client, migrations runner, repositories
+  domain/         # Derived state logic (prices, tradeability, next actions)
+  indexer/        # Event source, dispatcher, worker
+  jobs/           # Reconciliation service, scheduled job orchestration
+  observability/  # Logger (pino), metrics store, health checks
+migrations/       # SQL migration files
+deployments/      # Network deployment manifests (testnet bundled)
+scripts/          # Contract binding generation utilities
+```
