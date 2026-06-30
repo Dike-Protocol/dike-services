@@ -124,7 +124,22 @@ export async function buildApp() {
       services.manifest.data.network,
       marketId,
     );
-    sendJson(reply, detail);
+    const now = Math.floor(Date.now() / 1000);
+    sendJson(reply, {
+      ...detail,
+      market:
+        detail.market == null
+          ? null
+          : {
+              ...detail.market,
+              prices: derivePrices(detail.market.yes_reserve, detail.market.no_reserve),
+              tradeable: deriveTradeability({
+                status: detail.market.status as any,
+                expiry: detail.market.expiry ? Number(detail.market.expiry) : null,
+                now,
+              }),
+            },
+    });
   });
 
   app.get("/users/:address/portfolio", async (request, reply) => {
@@ -169,6 +184,7 @@ export async function buildApp() {
 
     sendJson(reply, {
       address,
+      canCreate: isApprovedCreator,
       canResolve: Boolean(address),
       canCouncil: isCouncilMember,
       canAdmin: isAdmin,

@@ -439,7 +439,14 @@ export class StateRepository {
 
   async getMarketDetail(network: string, marketId: number) {
     const [market, vault, resolution, council, trades, liquidity] = await Promise.all([
-      this.pool.query(`SELECT * FROM markets WHERE network = $1 AND market_id = $2`, [network, marketId]),
+      this.pool.query(
+        `SELECT m.*, p.yes_reserve, p.no_reserve, p.total_lp_shares, p.live AS pool_live
+         FROM markets m
+         LEFT JOIN pools p
+           ON p.network = m.network AND p.pool_id = m.pool_id
+         WHERE m.network = $1 AND m.market_id = $2`,
+        [network, marketId],
+      ),
       this.pool.query(`SELECT * FROM vault_snapshots WHERE network = $1 AND market_id = $2`, [network, marketId]),
       this.pool.query(`SELECT * FROM resolution_requests WHERE network = $1 AND market_id = (SELECT market_id FROM markets WHERE network = $1 AND market_id = $2)`, [network, marketId]),
       this.pool.query(`SELECT * FROM council_cases WHERE network = $1 AND market_id = $2 ORDER BY case_id DESC LIMIT 1`, [network, marketId]),
