@@ -1,5 +1,5 @@
 import type { LoadedManifest } from "../config/manifest.js";
-import { normalizeContractValue } from "../contracts/codecs.js";
+import { decodeRawEvent, normalizeContractValue } from "../contracts/codecs.js";
 import { DikeContractClient } from "../contracts/client.js";
 import type { StateRepository } from "../db/repositories/state-repository.js";
 import type { Outcome } from "../domain/types.js";
@@ -25,6 +25,11 @@ function toAmount(value: unknown, fallback = "0") {
   return fallback;
 }
 
+type ApprovalRecord = {
+  address: string;
+  approved: boolean;
+};
+
 export class ReconciliationService {
   constructor(
     private readonly manifest: LoadedManifest,
@@ -33,6 +38,51 @@ export class ReconciliationService {
     private readonly logger: Logger,
     private readonly metrics: MetricsStore,
   ) {}
+
+  private async fetchRecentApprovalEvents(
+    contractId: string,
+    topic: string,
+    latestLedger: number,
+  ): Promise<ApprovalRecord[]> {
+    const startLedger = Math.max(1, latestLedger - 5_000);
+    const approvals = new Map<string, ApprovalRecord>();
+    let cursor: string | undefined;
+
+    for (let page = 0; page < 10; page += 1) {
+      const response = await this.contracts.getEvents(
+        cursor
+          ? {
+              cursor,
+              filters: [{ type: "contract", contractIds: [contractId] }],
+              limit: 100,
+            }
+          : {
+              startLedger,
+              endLedger: latestLedger,
+              filters: [{ type: "contract", contractIds: [contractId] }],
+              limit: 100,
+            },
+      );
+
+      for (const event of response.events) {
+        const decoded = decodeRawEvent(event);
+        if (decoded.topic !== topic) continue;
+        const address = typeof decoded.topicValues[1] === "string" ? decoded.topicValues[1] : null;
+        if (!address) continue;
+        approvals.set(address, {
+          address,
+          approved: decoded.payload === true,
+        });
+      }
+
+      if (!response.cursor || response.events.length < 100) {
+        break;
+      }
+      cursor = response.cursor;
+    }
+
+    return [...approvals.values()];
+  }
 
   async reconcileGovernance(latestLedger: number) {
     const network = this.manifest.data.network;
@@ -55,10 +105,26 @@ export class ReconciliationService {
       pause_authority: pauseAuthorityEvent,
     });
 
-    const [creatorApprovals, councilApprovals] = await Promise.all([
+    let [creatorApprovals, councilApprovals] = await Promise.all([
       this.repository.getLatestGovernanceApprovals(network, marketFactoryContractId, "creator"),
       this.repository.getLatestGovernanceApprovals(network, councilContractId, "member"),
     ]);
+
+    if (creatorApprovals.length === 0) {
+      creatorApprovals = await this.fetchRecentApprovalEvents(
+        marketFactoryContractId,
+        "creator",
+        latestLedger,
+      );
+    }
+
+    if (councilApprovals.length === 0) {
+      councilApprovals = await this.fetchRecentApprovalEvents(
+        councilContractId,
+        "member",
+        latestLedger,
+      );
+    }
 
     for (const approval of creatorApprovals) {
       await this.repository.upsertGovernanceList(
