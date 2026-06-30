@@ -258,6 +258,44 @@ export class StateRepository {
     );
   }
 
+  async getLatestGovernanceAddressEvent(network: string, contractId: string, topic: string) {
+    const result = await this.pool.query<{
+      payload: string | null;
+    }>(
+      `SELECT payload #>> '{}' AS payload
+       FROM raw_contract_events
+       WHERE network = $1 AND contract_id = $2 AND topic = $3
+       ORDER BY ledger DESC, created_at DESC
+       LIMIT 1`,
+      [network, contractId, topic],
+    );
+    return result.rows[0]?.payload ?? null;
+  }
+
+  async getLatestGovernanceApprovals(
+    network: string,
+    contractId: string,
+    topic: string,
+  ) {
+    const result = await this.pool.query<{
+      address: string;
+      approved: boolean;
+    }>(
+      `SELECT DISTINCT ON (topic_values #>> '{1}')
+          topic_values #>> '{1}' AS address,
+          payload = 'true'::jsonb AS approved
+       FROM raw_contract_events
+       WHERE network = $1
+         AND contract_id = $2
+         AND topic = $3
+         AND topic_values #>> '{1}' IS NOT NULL
+       ORDER BY topic_values #>> '{1}', ledger DESC, created_at DESC`,
+      [network, contractId, topic],
+    );
+
+    return result.rows.filter((row) => row.address);
+  }
+
   async upsertTimelockAction(summary: Record<string, unknown>) {
     const entries = Object.entries(summary);
     const columns = entries.map(([key]) => key);
