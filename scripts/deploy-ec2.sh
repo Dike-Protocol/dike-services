@@ -9,7 +9,7 @@ cd "$APP_DIR"
 
 git fetch --prune origin
 git checkout main
-git pull --ff-only origin main
+git reset --hard origin/main
 
 docker build -t "$IMAGE_NAME" .
 
