@@ -217,3 +217,41 @@ migrations/       # SQL migration files
 deployments/      # Network deployment manifests (testnet bundled)
 scripts/          # Contract binding generation utilities
 ```
+
+## GitHub Actions CI/CD To EC2
+
+This repo includes [deploy-ec2.yml](/Users/sachplayz/Projects/Dike_Stellar/dike-services/.github/workflows/deploy-ec2.yml:1). On every push to `main`, GitHub Actions runs `npm ci`, `npm run build`, `npm test`, then SSHes into EC2 and runs [deploy-ec2.sh](/Users/sachplayz/Projects/Dike_Stellar/dike-services/scripts/deploy-ec2.sh:1).
+
+On the EC2 instance, the repo should already be cloned at:
+
+```bash
+~/dike-services
+```
+
+The server must also have:
+
+```bash
+sudo dnf update -y
+sudo dnf install -y git nginx docker
+sudo systemctl enable --now docker
+sudo usermod -aG docker ec2-user
+```
+
+Keep the production `.env` on EC2 at:
+
+```bash
+~/dike-services/.env
+```
+
+Add these GitHub repository secrets:
+
+```text
+EC2_HOST=your-ec2-public-ip
+EC2_USER=ec2-user
+EC2_SSH_KEY=the-private-key-content-for-ssh
+EC2_APP_DIR=/home/ec2-user/dike-services
+```
+
+`EC2_APP_DIR` is optional. If omitted, the workflow uses `/home/ec2-user/dike-services`.
+
+If the GitHub repo is private, make sure the EC2 instance can run `git pull`. The easiest setup is to add an SSH deploy key to GitHub and clone the repo on EC2 using the SSH URL.
