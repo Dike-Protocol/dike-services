@@ -24,6 +24,9 @@ export function normalizeContractValue(value: unknown): unknown {
   if (Buffer.isBuffer(value)) {
     return value.toString("hex");
   }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
   if (Array.isArray(value)) {
     return value.map(normalizeContractValue);
   }
