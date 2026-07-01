@@ -237,6 +237,7 @@ export class ReconciliationService {
       accumulated_lp_fees: normalized.accumulated_lp_fees ?? "0",
       accumulated_protocol_fees: normalized.accumulated_protocol_fees ?? "0",
       accumulated_cod_fees: normalized.accumulated_cod_fees ?? "0",
+      fee_per_share_scaled: normalized.fee_per_share_scaled ?? "0",
       live: normalized.live ?? false,
       last_reconciled_ledger: latestLedger,
       reconciled_at: new Date().toISOString(),
@@ -289,6 +290,7 @@ export class ReconciliationService {
   async reconcileCase(caseId: number, latestLedger: number) {
     const councilCase = await this.contracts.getCase(caseId);
     const normalized = normalizeContractValue(councilCase) as Record<string, unknown>;
+    const rewardPool = await this.contracts.getCaseRewardPool(caseId).catch(() => 0n);
 
     await this.repository.upsertCouncilCase({
       network: this.manifest.data.network,
@@ -309,6 +311,7 @@ export class ReconciliationService {
       no_votes: normalized.no_votes ?? 0,
       invalid_votes: normalized.invalid_votes ?? 0,
       total_valid_votes: normalized.total_valid_votes ?? 0,
+      reward_pool: toAmount(rewardPool),
       last_reconciled_ledger: latestLedger,
       reconciled_at: new Date().toISOString(),
     });
@@ -357,15 +360,26 @@ export class ReconciliationService {
   }
 
   async reconcileLpPosition(poolId: number, owner: string, latestLedger: number) {
-    const shares = await this.contracts.getLpBalance(poolId, owner);
+    const [shares, checkpoint, claimable] = await Promise.all([
+      this.contracts.getLpBalance(poolId, owner),
+      this.contracts.getLpFeeCheckpoint(poolId, owner).catch(() => 0n),
+      this.contracts.getClaimableLpFees(poolId, owner).catch(() => 0n),
+    ]);
     await this.repository.upsertLpPosition({
       network: this.manifest.data.network,
       pool_id: poolId,
       owner,
       shares: toAmount(shares),
+      fee_checkpoint: toAmount(checkpoint),
+      claimable_fees: toAmount(claimable),
       last_reconciled_ledger: latestLedger,
       reconciled_at: new Date().toISOString(),
     });
+  }
+
+  async recordLpFeesClaimed(poolId: number, owner: string, amount: string, latestLedger: number) {
+    await this.reconcileLpPosition(poolId, owner, latestLedger);
+    await this.repository.addLpFeesClaimed(this.manifest.data.network, poolId, owner, amount);
   }
 
   async reconcileUserVaultState(marketId: number, owner: string, latestLedger: number) {

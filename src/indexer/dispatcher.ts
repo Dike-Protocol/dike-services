@@ -258,6 +258,14 @@ export class EventDispatcher {
         }
         return;
       }
+      case "lpfee": {
+        const poolId = numericValue(topicValues[1]);
+        const lp = firstString(topicValues, payload, [2], []);
+        if (hasNumericValue(poolId) && lp) {
+          await this.reconciliation.recordLpFeesClaimed(poolId, lp, amountValue(payload), latestLedger);
+        }
+        return;
+      }
       case "role":
       case "pause":
         await this.reconciliation.reconcileGovernance(latestLedger);
@@ -413,13 +421,64 @@ export class EventDispatcher {
         }
         return;
       }
-      case "casefin":
-      case "commit":
-      case "reveal":
-      case "reward": {
+      case "casefin": {
         const caseId = numericValue(topicValues[1]);
         if (hasNumericValue(caseId)) {
           await this.reconciliation.reconcileCase(caseId, latestLedger);
+        }
+        return;
+      }
+      case "commit": {
+        const caseId = numericValue(topicValues[1]);
+        const voter = firstString(topicValues, payload, [2], []);
+        if (hasNumericValue(caseId)) {
+          await this.reconciliation.reconcileCase(caseId, latestLedger);
+        }
+        if (hasNumericValue(caseId) && voter) {
+          await this.repository.upsertCouncilVote({
+            network: this.manifest.data.network,
+            case_id: caseId,
+            voter,
+            has_commit: true,
+          });
+        }
+        return;
+      }
+      case "reveal": {
+        const caseId = numericValue(topicValues[1]);
+        const voter = firstString(topicValues, payload, [2], []);
+        const outcome = firstOutcome(topicValues, payload, [], ["outcome"], [0]);
+        if (hasNumericValue(caseId)) {
+          await this.reconciliation.reconcileCase(caseId, latestLedger);
+        }
+        if (hasNumericValue(caseId) && voter) {
+          await this.repository.upsertCouncilVote({
+            network: this.manifest.data.network,
+            case_id: caseId,
+            voter,
+            has_reveal: true,
+            revealed_outcome: outcome ?? null,
+          });
+        }
+        return;
+      }
+      case "reward": {
+        const caseId = numericValue(topicValues[1]);
+        const voter = firstString(topicValues, payload, [2], []);
+        const correctRaw = recordValue(payload, ["correct"], [0]);
+        const payoutRaw = recordValue(payload, ["payout"], [1]);
+        if (hasNumericValue(caseId)) {
+          await this.reconciliation.reconcileCase(caseId, latestLedger);
+        }
+        if (hasNumericValue(caseId) && voter) {
+          await this.repository.upsertCouncilVote({
+            network: this.manifest.data.network,
+            case_id: caseId,
+            voter,
+            claimed_reward: true,
+            correct: typeof correctRaw === "boolean" ? correctRaw : undefined,
+            reward_amount: amountValue(payoutRaw),
+          });
         }
         return;
       }
@@ -452,6 +511,9 @@ export class EventDispatcher {
               kind: action.kind.tag,
               target: String(action.target),
               payload_hash: Buffer.from(action.payload_hash).toString("hex"),
+              payload_json: JSON.stringify(action.payload, (_key, value) =>
+                typeof value === "bigint" ? value.toString() : value,
+              ),
               execute_after: Number(action.execute_after),
               expires_at: Number(action.expires_at),
               executed: action.executed,
