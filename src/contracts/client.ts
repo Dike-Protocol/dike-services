@@ -138,6 +138,14 @@ export class DikeContractClient {
     return readPlain(this.clients.amm.lp_balance({ pool_id: BigInt(poolId), owner }));
   }
 
+  async getClaimableLpFees(poolId: number, owner: string) {
+    return readOk(this.clients.amm.claimable_lp_fees({ pool_id: BigInt(poolId), owner }));
+  }
+
+  async getLpFeeCheckpoint(poolId: number, owner: string) {
+    return readPlain(this.clients.amm.lp_fee_checkpoint({ pool_id: BigInt(poolId), owner }));
+  }
+
   async getPositionBalance(owner: string, marketId: number, outcome: ConditionalTokens.Outcome) {
     return readPlain(
       this.clients.conditionalTokens.balance({
@@ -212,6 +220,10 @@ export class DikeContractClient {
 
   async getCaseForRequest(requestId: number) {
     return readOk(this.clients.councilOfDike.case_for_request({ request_id: BigInt(requestId) }));
+  }
+
+  async getCaseRewardPool(caseId: number) {
+    return readPlain(this.clients.councilOfDike.case_reward_pool({ case_id: BigInt(caseId) }));
   }
 
   async getTreasury() {

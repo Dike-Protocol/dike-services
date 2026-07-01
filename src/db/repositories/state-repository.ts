@@ -216,6 +216,22 @@ export class StateRepository {
     );
   }
 
+  async upsertCouncilVote(summary: Record<string, unknown>) {
+    const entries = Object.entries(summary);
+    const columns = entries.map(([key]) => key);
+    const values = entries.map(([, value]) => value);
+    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
+    const placeholders = columns.map((_, index) => `$${index + 1}`);
+
+    await this.pool.query(
+      `INSERT INTO council_votes (${columns.join(", ")})
+       VALUES (${placeholders.join(", ")})
+       ON CONFLICT (network, case_id, voter) DO UPDATE
+       SET ${assignments.join(", ")}, updated_at = NOW()`,
+      values,
+    );
+  }
+
   async upsertGovernanceConfig(network: string, values: Record<string, unknown>) {
     await this.pool.query(
       `INSERT INTO governance_config (network, treasury, timelock, fee_config_json, pause_authority)
@@ -341,6 +357,16 @@ export class StateRepository {
        ON CONFLICT (network, market_id, owner, outcome) DO UPDATE
        SET ${assignments.join(", ")}, updated_at = NOW()`,
       values,
+    );
+  }
+
+  async addLpFeesClaimed(network: string, poolId: number, owner: string, amount: string) {
+    await this.pool.query(
+      `UPDATE lp_positions
+       SET fees_claimed = (COALESCE(fees_claimed, '0')::numeric + $4::numeric)::text,
+           updated_at = NOW()
+       WHERE network = $1 AND pool_id = $2 AND owner = $3`,
+      [network, poolId, owner, amount],
     );
   }
 
