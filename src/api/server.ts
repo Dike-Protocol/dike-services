@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import IORedis from "ioredis";
 import { loadEnv } from "../config/env.js";
@@ -15,7 +16,7 @@ import { collectHealth } from "../observability/health.js";
 import { createLogger } from "../observability/logger.js";
 import { MetricsStore } from "../observability/metrics.js";
 import { jsonReplacer } from "../contracts/codecs.js";
-import { parseMarketId, parseMarketListQuery } from "./request-validation.js";
+import { parseAddress, parseCouncilCaseStatus, parseMarketId, parseMarketListQuery } from "./request-validation.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -31,6 +32,10 @@ function normalizeAddress(value: unknown) {
   return typeof value === "string" ? value.trim().toUpperCase() : "";
 }
 
+function matchesAdminKey(expected: string | undefined, headerValue: string | undefined) {
+  return Boolean(expected && headerValue && headerValue === expected);
+}
+
 async function createServices() {
   const env = loadEnv();
   const logger = createLogger(env);
@@ -43,7 +48,14 @@ async function createServices() {
   const contracts = new DikeContractClient(env, manifest, logger);
   const reconciliation = new ReconciliationService(manifest, contracts, repository, logger, metrics);
   const indexer = new IndexerWorker(env, manifest, contracts, repository, reconciliation, logger, metrics);
-  const scheduledJobs = new ScheduledJobs(env, repository, reconciliation, contracts, logger);
+  const scheduledJobs = new ScheduledJobs(
+    env,
+    manifest.data.network,
+    repository,
+    reconciliation,
+    contracts,
+    logger,
+  );
 
   await repository.bootstrapManifest(
     manifest,
@@ -75,7 +87,30 @@ export async function buildApp() {
   app.services = services;
 
   await app.register(cors);
+  await app.register(rateLimit, {
+    global: true,
+    max: 120,
+    timeWindow: "1 minute",
+  });
   await app.register(sensible);
+
+  app.addHook("preHandler", async (request, reply) => {
+    const path = request.routeOptions.url;
+    const needsAdminAuth =
+      path === "/metrics" ||
+      path === "/admin/governance" ||
+      path === "/admin/timelock";
+
+    if (!needsAdminAuth) {
+      return;
+    }
+
+    const apiKey = request.headers["x-api-key"];
+    const normalizedKey = Array.isArray(apiKey) ? apiKey[0] : apiKey;
+    if (!matchesAdminKey(services.env.ADMIN_API_KEY, normalizedKey)) {
+      return reply.code(401).send({ error: "admin api key required" });
+    }
+  });
 
   app.get("/health", async (_, reply) => {
     const health = await collectHealth(
@@ -144,9 +179,10 @@ export async function buildApp() {
 
   app.get("/users/:address/portfolio", async (request, reply) => {
     const params = request.params as { address: string };
+    const address = parseAddress(params.address, "address");
     const portfolio = await services.repository.getPortfolio(
       services.manifest.data.network,
-      params.address,
+      address,
     );
     sendJson(reply, portfolio);
   });
@@ -224,7 +260,7 @@ export async function buildApp() {
     const query = request.query as { status?: string };
     const result = await services.repository.getCouncilCases(
       services.manifest.data.network,
-      query.status,
+      parseCouncilCaseStatus(query.status),
     );
     sendJson(reply, result.rows);
   });

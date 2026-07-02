@@ -1,4 +1,13 @@
 type QueryScalar = string | number | boolean;
+const STELLAR_ADDRESS_REGEX = /^[A-Z2-7]{56}$/;
+const COUNCIL_CASE_STATUSES = new Set([
+  "Opened",
+  "CommitPhase",
+  "RevealPhase",
+  "ReadyToFinalize",
+  "Finalized",
+  "Cancelled",
+]);
 
 export class RequestValidationError extends Error {
   readonly statusCode = 400;
@@ -65,6 +74,28 @@ export function parseMarketId(value: unknown) {
     throw new RequestValidationError("id is required");
   }
   return parsed;
+}
+
+export function parseAddress(value: unknown, field: string) {
+  if (typeof value !== "string") {
+    throw new RequestValidationError(`${field} must be a string`);
+  }
+  const normalized = value.trim().toUpperCase();
+  if (!STELLAR_ADDRESS_REGEX.test(normalized)) {
+    throw new RequestValidationError(`${field} must be a valid Stellar address`);
+  }
+  return normalized;
+}
+
+export function parseCouncilCaseStatus(value: unknown) {
+  const status = queryString(value, "status");
+  if (status === undefined) {
+    return undefined;
+  }
+  if (!COUNCIL_CASE_STATUSES.has(status)) {
+    throw new RequestValidationError("status must be a valid council case status");
+  }
+  return status;
 }
 
 export function parseMarketListQuery(query: unknown) {

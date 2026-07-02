@@ -13,6 +13,7 @@ const envSchema = z.object({
   DIKE_MANIFEST_PATH: z.string().min(1).default("./deployments/testnet.json"),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
+  ADMIN_API_KEY: z.string().min(1).optional(),
   INDEXER_START_LEDGER: z
     .string()
     .optional()
@@ -22,6 +23,7 @@ const envSchema = z.object({
   INDEXER_LEDGER_WINDOW: z.coerce.number().int().positive().default(250),
   RECONCILIATION_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   INDEXER_LAG_ALERT_THRESHOLD: z.coerce.number().int().positive().default(50),
+  REORG_SAFETY_MARGIN_LEDGERS: z.coerce.number().int().min(0).default(10),
 });
 
 export type Env = z.infer<typeof envSchema> & {

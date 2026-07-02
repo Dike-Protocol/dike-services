@@ -90,19 +90,18 @@ export class ReconciliationService {
     const marketFactoryContractId = this.manifest.data.contracts.market_factory;
     const councilContractId = this.manifest.data.contracts.council_of_dike;
 
-    const [treasury, feeConfig, timelockEvent, treasuryEvent, pauseAuthorityEvent] = await Promise.all([
+    const [treasury, timelock, pauseAuthority, feeConfig] = await Promise.all([
       this.contracts.getTreasury().catch(() => null),
+      this.contracts.getTimelock().catch(() => null),
+      this.contracts.getPauseAuthority().catch(() => null),
       this.contracts.getFeeConfig().catch(() => null),
-      this.repository.getLatestGovernanceAddressEvent(network, governanceContractId, "timelock"),
-      this.repository.getLatestGovernanceAddressEvent(network, governanceContractId, "treas"),
-      this.repository.getLatestGovernanceAddressEvent(network, governanceContractId, "pauser"),
     ]);
 
     await this.repository.upsertGovernanceConfig(network, {
-      treasury: treasuryEvent ?? treasury,
-      timelock: timelockEvent ?? this.manifest.data.contracts.dike_timelock,
+      treasury,
+      timelock: timelock ?? this.manifest.data.contracts.dike_timelock,
       fee_config_json: normalizeContractValue(feeConfig ?? {}),
-      pause_authority: pauseAuthorityEvent,
+      pause_authority: pauseAuthority,
     });
 
     let [creatorApprovals, councilApprovals] = await Promise.all([
@@ -169,8 +168,18 @@ export class ReconciliationService {
       }
     }
 
-    const mismatchCount = await this.repository.getMismatchCount();
+    const [mismatchCount, persistentMismatchCount] = await Promise.all([
+      this.repository.getMismatchCount(),
+      this.repository.getPersistentMismatchCount(2),
+    ]);
     this.metrics.setReconciliationMismatchCount(mismatchCount);
+    this.metrics.setPersistentReconciliationMismatchCount(persistentMismatchCount);
+    if (persistentMismatchCount > 0) {
+      this.logger.warn(
+        { persistentMismatchCount, latestLedger },
+        "Reconciliation mismatches have persisted across at least two passes",
+      );
+    }
     this.logger.debug({ latestLedger }, "Governance reconciliation complete");
   }
 
@@ -387,6 +396,9 @@ export class ReconciliationService {
       userDeposit,
       rootStakeYes,
       rootStakeNo,
+      childUsedTotal,
+      childUsedYes,
+      childUsedNo,
       childDebt,
       parentDebtYes,
       parentDebtNo,
@@ -397,6 +409,9 @@ export class ReconciliationService {
       this.contracts.getUserDeposit(marketId, owner).catch(() => 0n),
       this.contracts.getRootStake(marketId, owner, contractOutcome("Yes")).catch(() => 0n),
       this.contracts.getRootStake(marketId, owner, contractOutcome("No")).catch(() => 0n),
+      this.contracts.getChildCollateralUsed(marketId, owner).catch(() => 0n),
+      this.contracts.getChildUsedForOutcome(marketId, owner, contractOutcome("Yes")).catch(() => 0n),
+      this.contracts.getChildUsedForOutcome(marketId, owner, contractOutcome("No")).catch(() => 0n),
       this.contracts.getChildDebt(marketId, owner).catch(() => 0n),
       this.contracts.getParentDebt(marketId, owner, contractOutcome("Yes")).catch(() => 0n),
       this.contracts.getParentDebt(marketId, owner, contractOutcome("No")).catch(() => 0n),
@@ -412,6 +427,9 @@ export class ReconciliationService {
       user_deposit: toAmount(userDeposit),
       root_stake_yes: toAmount(rootStakeYes),
       root_stake_no: toAmount(rootStakeNo),
+      child_used_total: toAmount(childUsedTotal),
+      child_used_yes: toAmount(childUsedYes),
+      child_used_no: toAmount(childUsedNo),
       child_debt: toAmount(childDebt),
       parent_debt_yes: toAmount(parentDebtYes),
       parent_debt_no: toAmount(parentDebtNo),
@@ -421,5 +439,27 @@ export class ReconciliationService {
       last_reconciled_ledger: latestLedger,
       reconciled_at: new Date().toISOString(),
     });
+  }
+
+  async reconcileTimelockAction(actionId: number, latestLedger: number) {
+    const action = await this.contracts.getTimelockAction(actionId);
+    const normalized = normalizeContractValue(action) as Record<string, unknown>;
+    await this.repository.upsertTimelockAction({
+      network: this.manifest.data.network,
+      action_id: actionId,
+      kind: action.kind.tag,
+      target: normalized.target ?? null,
+      payload_json: JSON.stringify(action.payload, (_key, value) =>
+        typeof value === "bigint" ? value.toString() : value,
+      ),
+      execute_after: normalized.execute_after ?? null,
+      expires_at: normalized.expires_at ?? null,
+      executed: normalized.executed ?? false,
+      cancelled: normalized.cancelled ?? false,
+      payload_hash: normalized.payload_hash ?? null,
+      last_reconciled_ledger: latestLedger,
+      reconciled_at: new Date().toISOString(),
+    });
+    this.logger.debug({ actionId, latestLedger }, "Timelock action reconciliation complete");
   }
 }

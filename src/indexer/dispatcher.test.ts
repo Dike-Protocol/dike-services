@@ -19,6 +19,11 @@ function makeDispatcher() {
     insertLiquidityEvent: vi.fn().mockResolvedValue(undefined),
   };
 
+  const logger = {
+    warn: vi.fn(),
+    debug: vi.fn(),
+  };
+
   const dispatcher = new EventDispatcher(
     {
       data: {
@@ -43,16 +48,14 @@ function makeDispatcher() {
       getTimelockAction: vi.fn(),
     } as never,
     reconciliation as never,
-    {
-      warn: vi.fn(),
-      debug: vi.fn(),
-    } as never,
+    logger as never,
   );
 
   return {
     dispatcher,
     reconciliation,
     repository,
+    logger,
   };
 }
 
@@ -277,5 +280,47 @@ describe("EventDispatcher", () => {
     expect(reconciliation.reconcileVault).toHaveBeenCalledWith(2, 104);
     expect(reconciliation.reconcileUserVaultState).toHaveBeenCalledWith(1, "GALICE", 104);
     expect(reconciliation.reconcileUserVaultState).toHaveBeenCalledWith(2, "GALICE", 104);
+  });
+
+  it("warns on unknown topics from known contracts", async () => {
+    const { dispatcher, logger } = makeDispatcher();
+
+    await dispatcher.dispatch({
+      network: "testnet",
+      contractId: "CREGISTRY",
+      ledger: 105,
+      txHash: "tx",
+      eventId: "event-unknown-topic",
+      topic: "mystery",
+      topicValues: ["mystery", 9n],
+      payload: null,
+      rawEvent: {},
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ contractId: "CREGISTRY", topic: "mystery" }),
+      "Unknown event topic from known contract",
+    );
+  });
+
+  it("warns on unknown contract ids", async () => {
+    const { dispatcher, logger } = makeDispatcher();
+
+    await dispatcher.dispatch({
+      network: "testnet",
+      contractId: "CUNKNOWN",
+      ledger: 106,
+      txHash: "tx",
+      eventId: "event-unknown-contract",
+      topic: "whatever",
+      topicValues: ["whatever"],
+      payload: null,
+      rawEvent: {},
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ contractId: "CUNKNOWN", topic: "whatever" }),
+      "Unknown contract id while dispatching event",
+    );
   });
 });

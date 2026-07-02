@@ -14,6 +14,15 @@ export class EventSource {
     private readonly logger: Logger,
     private readonly metrics: MetricsStore,
     private readonly ledgerWindow: number,
+    // Stellar uses SCP (Stellar Consensus Protocol) which provides immediate ledger
+    // finality — there are no probabilistic chain reorgs as in PoW chains. However,
+    // RPC node restarts or stale-cursor edge cases can leave the indexed checkpoint
+    // ahead of the node's reported chain tip. When that happens we rewind by this
+    // many ledgers so the next poll re-indexes recent ledgers, leveraging event
+    // dispatch idempotency to avoid double-counts (raw_contract_events has a
+    // UNIQUE constraint on (network, event_id); trades/liquidity_events use
+    // ON CONFLICT ... DO NOTHING on event_id).
+    private readonly reorgSafetyMarginLedgers: number = 10,
   ) {}
 
   async pollContract(contractId: string, module: string, startLedger?: number) {
@@ -39,9 +48,21 @@ export class EventSource {
 
     if (fromLedger > latestLedger.sequence) {
       this.metrics.setContractLag(contractId, module, checkpoint.lastProcessedLedger, latestLedger.sequence);
+      const rewindedCheckpoint = Math.max(0, latestLedger.sequence - this.reorgSafetyMarginLedgers);
+      this.metrics.noteCheckpointRewind();
+      this.logger.warn(
+        {
+          contractId,
+          module,
+          oldCheckpoint: checkpoint.lastProcessedLedger,
+          newCheckpoint: rewindedCheckpoint,
+          margin: this.reorgSafetyMarginLedgers,
+        },
+        "Checkpoint ahead of chain tip; rewinding to apply defensive safety margin (RPC node inconsistency or stale-state restart, not a chain reorg)",
+      );
       return {
         events: [],
-        checkpointLedger: latestLedger.sequence,
+        checkpointLedger: rewindedCheckpoint,
         cursor: checkpoint.lastProcessedCursor,
         complete: true,
         resetCheckpoint: true,
@@ -60,6 +81,7 @@ export class EventSource {
     let cursor: string | undefined;
     let exhaustedPageLimit = true;
     let complete = true;
+    let overflowedWindow = false;
     let request:
       | {
           startLedger: number;
@@ -85,6 +107,7 @@ export class EventSource {
 
       for (const event of response.events) {
         if (event.ledger > endLedger) {
+          overflowedWindow = true;
           continue;
         }
         const decoded = decodeRawEvent(event);
@@ -117,6 +140,15 @@ export class EventSource {
         filters,
         limit,
       };
+
+      if (overflowedWindow) {
+        complete = false;
+        this.logger.warn(
+          { contractId, module, fromLedger, endLedger },
+          "Cursor pagination spilled past the requested ledger window; checkpoint will not advance",
+        );
+        break;
+      }
     }
 
     if (exhaustedPageLimit) {

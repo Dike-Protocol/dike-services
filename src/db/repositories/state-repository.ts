@@ -21,6 +21,23 @@ export type EventIdentity = Pick<EventRecord, "network" | "contractId" | "eventI
 export class StateRepository {
   constructor(private readonly pool: PgPool) {}
 
+  private buildUpsertSpec(table: string, summary: Record<string, unknown>, allowedColumns: readonly string[]) {
+    const entries = Object.entries(summary).filter(([key]) => allowedColumns.includes(key));
+    const providedKeys = new Set(Object.keys(summary));
+    const invalidKeys = [...providedKeys].filter((key) => !allowedColumns.includes(key));
+    if (invalidKeys.length > 0) {
+      throw new Error(`Unexpected columns for ${table}: ${invalidKeys.join(", ")}`);
+    }
+    if (entries.length === 0) {
+      throw new Error(`No allowed columns provided for ${table}`);
+    }
+    const columns = entries.map(([key]) => key);
+    const values = entries.map(([, value]) => value);
+    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
+    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    return { columns, values, assignments, placeholders };
+  }
+
   async withTransaction<T>(handler: (client: PoolClient) => Promise<T>) {
     const client = await this.pool.connect();
     try {
@@ -153,11 +170,13 @@ export class StateRepository {
   }
 
   async upsertMarketSummary(summary: Record<string, unknown>) {
-    const entries = Object.entries(summary);
-    const columns = entries.map(([key]) => key);
-    const values = entries.map(([, value]) => value);
-    const assignments = columns.map((column, index) => `${column} = EXCLUDED.${column}`);
-    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    const { columns, values, assignments, placeholders } = this.buildUpsertSpec("markets", summary, [
+      "network", "market_id", "question", "question_hash", "rules_uri", "rules_hash", "creator",
+      "category", "collateral", "yes_token_id", "no_token_id", "expiry", "status",
+      "has_final_outcome", "final_outcome", "pool_id", "bond_amount", "dispute_window",
+      "has_request", "request_id", "created_at_unix", "fee_config_json", "last_reconciled_ledger",
+      "reconciled_at",
+    ]);
 
     await this.pool.query(
       `INSERT INTO markets (${columns.join(", ")})
@@ -169,11 +188,11 @@ export class StateRepository {
   }
 
   async upsertPool(summary: Record<string, unknown>) {
-    const entries = Object.entries(summary);
-    const columns = entries.map(([key]) => key);
-    const values = entries.map(([, value]) => value);
-    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
-    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    const { columns, values, assignments, placeholders } = this.buildUpsertSpec("pools", summary, [
+      "network", "pool_id", "market_id", "yes_reserve", "no_reserve", "total_lp_shares",
+      "accumulated_lp_fees", "accumulated_protocol_fees", "accumulated_cod_fees",
+      "fee_per_share_scaled", "live", "last_reconciled_ledger", "reconciled_at",
+    ]);
 
     await this.pool.query(
       `INSERT INTO pools (${columns.join(", ")})
@@ -185,11 +204,12 @@ export class StateRepository {
   }
 
   async upsertResolutionRequest(summary: Record<string, unknown>) {
-    const entries = Object.entries(summary);
-    const columns = entries.map(([key]) => key);
-    const values = entries.map(([, value]) => value);
-    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
-    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    const { columns, values, assignments, placeholders } = this.buildUpsertSpec("resolution_requests", summary, [
+      "network", "request_id", "market_id", "status", "requested_at", "bond_amount", "dispute_window",
+      "has_proposal", "proposer", "proposed_outcome", "proposal_evidence_uri", "proposed_at",
+      "has_dispute", "disputer", "disputed_outcome", "dispute_evidence_uri", "disputed_at",
+      "has_final_outcome", "final_outcome", "last_reconciled_ledger", "reconciled_at",
+    ]);
 
     await this.pool.query(
       `INSERT INTO resolution_requests (${columns.join(", ")})
@@ -201,11 +221,12 @@ export class StateRepository {
   }
 
   async upsertCouncilCase(summary: Record<string, unknown>) {
-    const entries = Object.entries(summary);
-    const columns = entries.map(([key]) => key);
-    const values = entries.map(([, value]) => value);
-    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
-    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    const { columns, values, assignments, placeholders } = this.buildUpsertSpec("council_cases", summary, [
+      "network", "case_id", "request_id", "market_id", "status", "proposer", "proposer_outcome",
+      "disputer", "disputer_outcome", "voting_start", "commit_end", "reveal_end",
+      "has_final_outcome", "final_outcome", "yes_votes", "no_votes", "invalid_votes",
+      "total_valid_votes", "reward_pool", "last_reconciled_ledger", "reconciled_at",
+    ]);
 
     await this.pool.query(
       `INSERT INTO council_cases (${columns.join(", ")})
@@ -217,11 +238,10 @@ export class StateRepository {
   }
 
   async upsertCouncilVote(summary: Record<string, unknown>) {
-    const entries = Object.entries(summary);
-    const columns = entries.map(([key]) => key);
-    const values = entries.map(([, value]) => value);
-    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
-    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    const { columns, values, assignments, placeholders } = this.buildUpsertSpec("council_votes", summary, [
+      "network", "case_id", "voter", "commitment", "revealed_outcome", "claimed",
+      "last_reconciled_ledger", "reconciled_at",
+    ]);
 
     await this.pool.query(
       `INSERT INTO council_votes (${columns.join(", ")})
@@ -313,11 +333,10 @@ export class StateRepository {
   }
 
   async upsertTimelockAction(summary: Record<string, unknown>) {
-    const entries = Object.entries(summary);
-    const columns = entries.map(([key]) => key);
-    const values = entries.map(([, value]) => value);
-    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
-    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    const { columns, values, assignments, placeholders } = this.buildUpsertSpec("timelock_actions", summary, [
+      "network", "action_id", "kind", "target", "payload_json", "execute_after", "expires_at",
+      "executed", "cancelled", "payload_hash", "last_reconciled_ledger", "reconciled_at",
+    ]);
 
     await this.pool.query(
       `INSERT INTO timelock_actions (${columns.join(", ")})
@@ -329,11 +348,12 @@ export class StateRepository {
   }
 
   async upsertVaultSnapshot(summary: Record<string, unknown>) {
-    const entries = Object.entries(summary);
-    const columns = entries.map(([key]) => key);
-    const values = entries.map(([, value]) => value);
-    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
-    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    const { columns, values, assignments, placeholders } = this.buildUpsertSpec("vault_snapshots", summary, [
+      "network", "market_id", "total_deposited", "collateral_backing", "amm_collateral",
+      "child_collateral_issued", "child_collateral_repaid", "child_collateral_defaulted",
+      "redeemed", "protocol_fees", "lp_fees", "cod_fees", "proposal_bonds", "dispute_bonds",
+      "refundable", "last_reconciled_ledger", "reconciled_at",
+    ]);
 
     await this.pool.query(
       `INSERT INTO vault_snapshots (${columns.join(", ")})
@@ -345,11 +365,9 @@ export class StateRepository {
   }
 
   async upsertUserPosition(summary: Record<string, unknown>) {
-    const entries = Object.entries(summary);
-    const columns = entries.map(([key]) => key);
-    const values = entries.map(([, value]) => value);
-    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
-    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    const { columns, values, assignments, placeholders } = this.buildUpsertSpec("user_positions", summary, [
+      "network", "market_id", "owner", "outcome", "balance", "last_reconciled_ledger", "reconciled_at",
+    ]);
 
     await this.pool.query(
       `INSERT INTO user_positions (${columns.join(", ")})
@@ -371,11 +389,10 @@ export class StateRepository {
   }
 
   async upsertLpPosition(summary: Record<string, unknown>) {
-    const entries = Object.entries(summary);
-    const columns = entries.map(([key]) => key);
-    const values = entries.map(([, value]) => value);
-    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
-    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    const { columns, values, assignments, placeholders } = this.buildUpsertSpec("lp_positions", summary, [
+      "network", "pool_id", "owner", "shares", "fee_checkpoint", "claimable_fees",
+      "last_reconciled_ledger", "reconciled_at",
+    ]);
 
     await this.pool.query(
       `INSERT INTO lp_positions (${columns.join(", ")})
@@ -387,11 +404,12 @@ export class StateRepository {
   }
 
   async upsertUserVaultState(summary: Record<string, unknown>) {
-    const entries = Object.entries(summary);
-    const columns = entries.map(([key]) => key);
-    const values = entries.map(([, value]) => value);
-    const assignments = columns.map((column) => `${column} = EXCLUDED.${column}`);
-    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    const { columns, values, assignments, placeholders } = this.buildUpsertSpec("user_vault_state", summary, [
+      "network", "market_id", "owner", "user_deposit", "root_stake_yes", "root_stake_no",
+      "child_used_total", "child_used_yes", "child_used_no",
+      "child_debt", "parent_debt_yes", "parent_debt_no", "redeemed_yes", "redeemed_no",
+      "redeemed_invalid", "last_reconciled_ledger", "reconciled_at",
+    ]);
 
     await this.pool.query(
       `INSERT INTO user_vault_state (${columns.join(", ")})
@@ -552,6 +570,16 @@ export class StateRepository {
     return Number(result.rows[0]?.count ?? 0);
   }
 
+  async getPersistentMismatchCount(minSeenCount = 2) {
+    const result = await this.pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+         FROM reconciliation_mismatches
+        WHERE seen_count >= $1`,
+      [minSeenCount],
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
   async noteMismatch(network: string, module: string, entityId: string, message: string) {
     await this.pool.query(
       `INSERT INTO reconciliation_mismatches (network, module, entity_id, message)
@@ -565,6 +593,58 @@ export class StateRepository {
 
   async ping() {
     await this.pool.query("SELECT 1");
+  }
+
+  async tryAcquireIndexerLease(lockKey: number) {
+    const result = await this.pool.query<{ acquired: boolean }>(
+      `SELECT pg_try_advisory_lock($1) AS acquired`,
+      [lockKey],
+    );
+    return result.rows[0]?.acquired ?? false;
+  }
+
+  async releaseIndexerLease(lockKey: number) {
+    await this.pool.query(`SELECT pg_advisory_unlock($1)`, [lockKey]);
+  }
+
+  async listKnownMarketIds(network: string) {
+    const result = await this.pool.query<{ market_id: string }>(
+      `SELECT market_id::text AS market_id FROM markets WHERE network = $1 ORDER BY market_id DESC`,
+      [network],
+    );
+    return result.rows.map((row) => Number(row.market_id));
+  }
+
+  async listKnownPositionOwners(network: string, marketId: number) {
+    const result = await this.pool.query<{ owner: string }>(
+      `SELECT DISTINCT owner FROM user_positions WHERE network = $1 AND market_id = $2`,
+      [network, marketId],
+    );
+    return result.rows.map((row) => row.owner);
+  }
+
+  async listKnownLpOwners(network: string, poolId: number) {
+    const result = await this.pool.query<{ owner: string }>(
+      `SELECT DISTINCT owner FROM lp_positions WHERE network = $1 AND pool_id = $2`,
+      [network, poolId],
+    );
+    return result.rows.map((row) => row.owner);
+  }
+
+  async listKnownMarketPools(network: string) {
+    const result = await this.pool.query<{ market_id: string; pool_id: string }>(
+      `SELECT market_id::text AS market_id, pool_id::text AS pool_id FROM pools WHERE network = $1`,
+      [network],
+    );
+    return result.rows.map((row) => ({ marketId: Number(row.market_id), poolId: Number(row.pool_id) }));
+  }
+
+  async listKnownTimelockActionIds(network: string) {
+    const result = await this.pool.query<{ action_id: string }>(
+      `SELECT action_id::text AS action_id FROM timelock_actions WHERE network = $1 ORDER BY action_id DESC`,
+      [network],
+    );
+    return result.rows.map((row) => Number(row.action_id));
   }
 }
 

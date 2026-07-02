@@ -1,6 +1,7 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 import type { Env } from "../config/env.js";
 import type { LoadedManifest } from "../config/manifest.js";
+import { scValToNative } from "./codecs.js";
 import * as Amm from "./generated/amm.js";
 import * as CodOracle from "./generated/cod_oracle.js";
 import * as CollateralVault from "./generated/collateral_vault.js";
@@ -110,6 +111,28 @@ export class DikeContractClient {
     return this.rpc.getHealth();
   }
 
+  private async simulateContractRead(contractId: string, method: string, args: StellarSdk.xdr.ScVal[] = []) {
+    const account = await this.rpc.getAccount(this.manifest.data.admin);
+    const contract = new StellarSdk.Contract(contractId);
+    const tx = new StellarSdk.TransactionBuilder(account, {
+      fee: StellarSdk.BASE_FEE,
+      networkPassphrase: this.env.STELLAR_NETWORK_PASSPHRASE,
+    })
+      .addOperation(contract.call(method, ...args))
+      .setTimeout(300)
+      .build();
+
+    const simulation = await this.rpc.simulateTransaction(tx);
+    if (StellarSdk.rpc.Api.isSimulationError(simulation)) {
+      throw new Error(`Read simulation failed: ${simulation.error}`);
+    }
+    const success = simulation as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse;
+    if (!success.result?.retval) {
+      throw new Error(`No return value for ${method}`);
+    }
+    return scValToNative(success.result.retval);
+  }
+
   async getEvents(request: StellarSdk.rpc.Api.GetEventsRequest) {
     return this.rpc._getEvents(request);
   }
@@ -192,6 +215,14 @@ export class DikeContractClient {
     return readPlain(this.clients.collateralVault.child_debt({ child_market_id: BigInt(childMarketId), user: owner }));
   }
 
+  async getChildCollateralUsed(parentMarketId: number, owner: string) {
+    return readPlain(this.clients.collateralVault.child_collateral_used({ parent_market_id: BigInt(parentMarketId), user: owner }));
+  }
+
+  async getChildUsedForOutcome(parentMarketId: number, owner: string, outcome: CollateralVault.Outcome) {
+    return readPlain(this.clients.collateralVault.child_used_for_outcome({ parent_market_id: BigInt(parentMarketId), user: owner, outcome }));
+  }
+
   async getParentDebt(parentMarketId: number, owner: string, outcome: CollateralVault.Outcome) {
     return readPlain(
       this.clients.collateralVault.parent_debt({
@@ -228,6 +259,20 @@ export class DikeContractClient {
 
   async getTreasury() {
     return readOk(this.clients.dikeGovernance.treasury());
+  }
+
+  async getTimelock() {
+    return this.simulateContractRead(
+      this.manifest.data.contracts.dike_governance,
+      "timelock",
+    ) as Promise<string>;
+  }
+
+  async getPauseAuthority() {
+    return this.simulateContractRead(
+      this.manifest.data.contracts.dike_governance,
+      "pause_authority",
+    ) as Promise<string>;
   }
 
   async getFeeConfig() {
