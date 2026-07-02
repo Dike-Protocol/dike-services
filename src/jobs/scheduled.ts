@@ -10,6 +10,7 @@ export class ScheduledJobs {
 
   constructor(
     private readonly env: Env,
+    private readonly network: string,
     private readonly repository: StateRepository,
     private readonly reconciliation: ReconciliationService,
     private readonly contracts: DikeContractClient,
@@ -41,6 +42,36 @@ export class ScheduledJobs {
     try {
       const latestLedger = await this.contracts.getLatestLedger();
       await this.reconciliation.reconcileGovernance(latestLedger.sequence);
+
+      const marketIds = await this.repository.listKnownMarketIds(this.network);
+      const marketPools = await this.repository.listKnownMarketPools(this.network);
+      const poolByMarket = new Map(marketPools.map(({ marketId, poolId }) => [marketId, poolId]));
+
+      for (const marketId of marketIds) {
+        await this.reconciliation.reconcileMarket(marketId, latestLedger.sequence);
+        await this.reconciliation.reconcileVault(marketId, latestLedger.sequence);
+
+        const positionOwners = await this.repository.listKnownPositionOwners(this.network, marketId);
+        for (const owner of positionOwners) {
+          await this.reconciliation.reconcileUserPosition(marketId, owner, latestLedger.sequence);
+        }
+        for (const owner of positionOwners) {
+          await this.reconciliation.reconcileUserVaultState(marketId, owner, latestLedger.sequence);
+        }
+
+        const poolId = poolByMarket.get(marketId);
+        if (poolId !== undefined) {
+          const lpOwners = await this.repository.listKnownLpOwners(this.network, poolId);
+          for (const owner of lpOwners) {
+            await this.reconciliation.reconcileLpPosition(poolId, owner, latestLedger.sequence);
+          }
+        }
+      }
+
+      const timelockActionIds = await this.repository.listKnownTimelockActionIds(this.network);
+      for (const actionId of timelockActionIds) {
+        await this.reconciliation.reconcileTimelockAction(actionId, latestLedger.sequence);
+      }
     } catch (error) {
       this.logger.error({ error }, "Scheduled reconciliation failed");
     } finally {
