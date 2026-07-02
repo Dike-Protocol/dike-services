@@ -35,9 +35,12 @@ for attempt in $(seq 1 30); do
       "$IMAGE_NAME"
     docker container prune -f >/dev/null
     docker image prune -f >/dev/null
-    if curl --fail --silent --show-error "$HEALTHCHECK_URL" >/dev/null; then
-      exit 0
-    fi
+    for post_attempt in $(seq 1 15); do
+      if curl --fail --silent --show-error "$HEALTHCHECK_URL" >/dev/null; then
+        exit 0
+      fi
+      sleep 2
+    done
     echo "Switchover completed but primary health endpoint did not recover."
     docker logs --tail=200 "$APP_NAME" || true
     exit 1
