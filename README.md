@@ -52,7 +52,7 @@ REST API (Fastify) ──► StateRepository ──► dike-web
 
 - Node.js 20+
 - Docker (for PostgreSQL and Redis)
-- A deployment manifest from `dike-contracts` (bundled for testnet at `deployments/testnet.json`)
+- A deployment manifest from `dike-contracts` (bundled at `deployments/testnet.json` and `deployments/mainnet.json`)
 
 ## Getting Started
 
@@ -220,7 +220,14 @@ scripts/          # Contract binding generation utilities
 
 ## GitHub Actions CI/CD To EC2
 
-This repo includes [deploy-ec2.yml](/Users/sachplayz/Projects/Dike_Stellar/dike-services/.github/workflows/deploy-ec2.yml:1). On every push to `main`, GitHub Actions runs `npm ci`, `npm run build`, `npm test`, then SSHes into EC2 and runs [deploy-ec2.sh](/Users/sachplayz/Projects/Dike_Stellar/dike-services/scripts/deploy-ec2.sh:1).
+This repo includes two workflows that both run `npm ci`, `npm run build`, `npm test`, then SSH into EC2 and run [deploy-ec2.sh](/Users/sachplayz/Projects/Dike_Stellar/dike-services/scripts/deploy-ec2.sh:1):
+
+| Workflow | Trigger | App dir | Ports (live / candidate) |
+|---|---|---|---|
+| [deploy-ec2.yml](/Users/sachplayz/Projects/Dike_Stellar/dike-services/.github/workflows/deploy-ec2.yml:1) (testnet) | push to `main` | `~/dike-services` | `4000` / `4001` |
+| [deploy-ec2-mainnet.yml](/Users/sachplayz/Projects/Dike_Stellar/dike-services/.github/workflows/deploy-ec2-mainnet.yml:1) | push to `dike-mainnet` | `~/dike-services-mainnet` | `4100` / `4101` |
+
+`deploy-ec2.sh` reads `BRANCH`, `PORT`, and `CANDIDATE_PORT` (each falling back to the testnet defaults above) so the same script drives both deploys — the mainnet workflow just passes different values and a `-mainnet` suffixed `APP_NAME`/`IMAGE_NAME`.
 
 On the EC2 instance, the repo should already be cloned at:
 
